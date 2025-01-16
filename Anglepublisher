@@ -1,0 +1,92 @@
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float64
+from sensor_msgs.msg import Joy, Imu
+import numpy as np
+from kaqu_controller.KaquIK.InverseKinematics import InverseKinematics  # IK 클
+from kaqu_controller.Kaquctrl.RobotController import RobotController
+from kaqu_controller.KaquCmdManager.CmdManagerNode import RobotState, RobotCommand
+
+class QuadrupedControllerNode(Node):
+    def __init__(self):
+        super().__init__('quadruped_controller_node')
+
+        # 로봇 기하학 설정, params에서 가져와도됨
+        self.body = [100., 100.]  # bodyLength, bodyWidth
+        self.legs = [100., 100., 100., 100.]  # l1, l2, l3, l4
+
+        # Inverse Kinematics 초기화
+        self.inverse_kinematics = InverseKinematics(self.body, self.legs)
+
+        # 퍼블리셔 설정
+        self.command_topics = [
+            "KAQU_FR1_joint/command",
+            "KAQU_FR2_joint/command",
+            "KAQU_FR3_joint/command",
+            "KAQU_FL1_joint/command",
+            "KAQU_FL2_joint/command",
+            "KAQU_FL3_joint/command",
+            "KAQU_RR1_joint/command",
+            "KAQU_RR2_joint/command",
+            "KAQU_RR3_joint/command",
+            "KAQU_RL1_joint/command",
+            "KAQU_RL2_joint/command",
+            "KAQU_RL3_joint/command"
+        ]
+
+        self.data_type = Float64
+        self.queue_size = 10
+        self._publishers = self.joint_pub()  # 여기를 함수 호출로 변경
+
+        # RobotState 상수 정의
+        self.BODY_LOCAL_POSITION = [0.0, 0.0, 0.0]  # [dx, dy, dz]
+        self.BODY_LOCAL_ORIENTATION = [0.0, 0.0, 0.0]  # [roll, pitch, yaw]
+        
+        # 임시로 상수 값으로 대체
+        self.robotcon = RobotController(self.body, self.legs)
+        self.leg_position = self.robotcon.run()
+                # 타이머 설정 (0.1초마다 main_control 호출)
+        self.timer_period = 0.1  # seconds
+        self.timer = self.create_timer(self.timer_period, self.main_control)
+
+    def joint_pub(self):
+        publishers = []
+        for topic in self.command_topics:
+            publisher = self.create_publisher(
+                Float64,
+                topic,
+                self.queue_size
+            )
+            publishers.append(publisher)
+        return publishers
+
+    def main_control(self):
+        dx, dy, dz = self.BODY_LOCAL_POSITION
+        roll, pitch, yaw = self.BODY_LOCAL_ORIENTATION
+
+        try:
+            pub_angles = self.inverse_kinematics.inverse_kinematics(
+                self.leg_position, dx, dy, dz, roll, pitch, yaw
+            )
+
+            for i, angle in enumerate(pub_angles):
+                msg = Float64()
+                msg.data = angle
+                self._publishers[i].publish(msg)
+        except Exception as e:
+            self.get_logger().error(f"Inverse kinematics calculation failed: {e}")
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = QuadrupedControllerNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+
